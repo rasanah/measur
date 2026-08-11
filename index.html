@@ -924,19 +924,90 @@ window.deleteAssociation = async function (id) {
     alert('تعذر حذف الجمعية. تحقق من الصلاحيات.');
   }
 };
+let realtimeChannel = null;
 
+function startRealtimeSync() {
+  if (realtimeChannel) return;
+
+  realtimeChannel = supabaseClient
+    .channel('organization-live-sync')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'organization_data'
+      },
+      async (payload) => {
+
+        const changedOrgId =
+          payload.new?.organization_id ||
+          payload.old?.organization_id;
+
+        // لا نحدث الجمعية المفتوحة إذا كان التغيير لجمعية أخرى
+        if (
+db.cloudOrganizationId &&
+changedOrgId &&
+changedOrgId !== db.cloudOrganizationId
+        ) {
+          return;
+        }
+
+        console.log('Realtime update received:', payload);
+
+        // جلب أحدث نسخة من السحابة
+if (changedOrgId) {
+  const { data: row, error } = await supabaseClient
+    .from('organization_data')
+    .select('data')
+    .eq('organization_id', changedOrgId)
+    .single();
+
+  if (!error && row && row.data) {
+    db = normalizeDb(row.data);
+    db.cloudOrganizationId = changedOrgId;
+
+    if (!db.associationId) {
+      db.associationId = changedOrgId;
+    }
+
+    safeStore(db);
+  }
+}
+
+// تحديث الواجهة فوراً بعد وصول التغيير من Supabase
+const activePage = document.querySelector('.page.active');
+
+if (activePage) {
+  const pageId = activePage.id;
+
+  if (pageId === 'associations') {
+    await renderAssociations();
+  } else {
+    render(pageId);
+  }
+}
+
+      }
+    )
+    .subscribe((status) => {
+      console.log('Realtime status:', status);
+    });
+}
 (async function startApp(){
   const { data: { session } } = await supabaseClient.auth.getSession();
 
-  if (session && session.user) {
-    currentUser = session.user;
-     initNav();
-    renderHome();
-  } else {
+if (session && session.user) {
+  currentUser = session.user;
+  initNav();
+
+  startRealtimeSync();
+
+  renderHome();
+} else {
     showLoginScreen();
   }
 })();
   
-})();
 </script>
 </body></html>
