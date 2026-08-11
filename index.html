@@ -640,7 +640,7 @@ function scheduleCloudSave() {
 
   cloudSaveTimer = setTimeout(() => {
     saveCurrentToCloud(false);
-  }, 1200);
+  }, 400);
 }
   const originalSaveAll=window.saveAll;
 window.saveAll = function(msg = false) {
