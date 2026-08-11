@@ -563,15 +563,110 @@ db=normalizeDb(db); db.version=APP_VERSION; safeStore(db);
   }
   // migrate the current association from previous single-association versions into the registry once
   if(hasMeaningfulData(db)){ensureAssociationId();upsertCurrentToRegistry();safeStore(db)}
+let cloudSaveTimer = null;
+let cloudSaving = false;
 
+async function saveCurrentToCloud(showMessage = false) {
+  if (!currentUser || !hasMeaningfulData(db)) return false;
+
+  if (cloudSaving) return false;
+  cloudSaving = true;
+
+  try {
+    // إنشاء الجمعية في Supabase لأول مرة فقط
+    if (!db.cloudOrganizationId) {
+      const { data: orgId, error: createError } =
+        await supabaseClient.rpc('create_organization', {
+          p_name: (db.profile && db.profile.name) || 'جمعية بدون اسم',
+          p_license_number: (db.profile && db.profile.license) || null,
+          p_city: (db.profile && db.profile.city) || null
+        });
+
+      if (createError) throw createError;
+
+      db.cloudOrganizationId = orgId;
+      safeStore(db);
+      upsertCurrentToRegistry();
+    }
+
+    // تحديث البيانات الأساسية للجمعية
+    const { error: orgError } = await supabaseClient
+      .from('organizations')
+      .update({
+        name: (db.profile && db.profile.name) || 'جمعية بدون اسم',
+        license_number: (db.profile && db.profile.license) || null,
+        city: (db.profile && db.profile.city) || null
+      })
+      .eq('id', db.cloudOrganizationId);
+
+    if (orgError) throw orgError;
+
+    // حفظ جميع بيانات المنصة
+    const { error: dataError } = await supabaseClient
+      .from('organization_data')
+      .upsert({
+        organization_id: db.cloudOrganizationId,
+        schema_version: '8.0',
+        data: db,
+        last_saved_by: currentUser.id
+      }, {
+        onConflict: 'organization_id'
+      });
+
+    if (dataError) throw dataError;
+
+    if (showMessage) {
+      toast('تم الحفظ على الإنترنت بنجاح');
+    }
+
+    return true;
+
+  } catch (error) {
+    console.error('Cloud save error:', error);
+
+    if (showMessage) {
+      toast('تعذر الحفظ السحابي، وتم الاحتفاظ بالنسخة المحلية');
+    }
+
+    return false;
+
+  } finally {
+    cloudSaving = false;
+  }
+}
+
+function scheduleCloudSave() {
+  clearTimeout(cloudSaveTimer);
+
+  cloudSaveTimer = setTimeout(() => {
+    saveCurrentToCloud(false);
+  }, 1200);
+}
   const originalSaveAll=window.saveAll;
-  window.saveAll=function(msg=false){
-    db.updated=new Date().toISOString();
-    ensureAssociationId();
-    const persisted=safeStore(db);
-    upsertCurrentToRegistry();
-    if(msg)toast(persisted?'تم حفظ بيانات الجمعية وتحديث سجل الجمعيات':'تم الحفظ داخل الجلسة؛ المتصفح منع التخزين المحلي، لذا صدّر نسخة احتياطية');
-  };
+window.saveAll = function(msg = false) {
+  db.updated = new Date().toISOString();
+
+  ensureAssociationId();
+
+  // نسخة محلية احتياطية
+  const persisted = safeStore(db);
+  upsertCurrentToRegistry();
+
+  // حفظ تلقائي سحابي أثناء الكتابة
+  if (!msg) {
+    scheduleCloudSave();
+    return;
+  }
+
+  // عند الضغط على زر "حفظ"
+  toast('جارٍ الحفظ...');
+
+  saveCurrentToCloud(true).then(ok => {
+    if (!ok && persisted) {
+      console.log('Local backup preserved');
+    }
+  });
+};
 
   window.renderAssociations=function(){
     const el=document.getElementById('associations');if(!el)return;
