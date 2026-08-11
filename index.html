@@ -668,49 +668,262 @@ window.saveAll = function(msg = false) {
   });
 };
 
-  window.renderAssociations=function(){
-    const el=document.getElementById('associations');if(!el)return;
-    const list=loadRegistry().slice().sort((a,b)=>String(b.updated||'').localeCompare(String(a.updated||'')));
-    const q=(window._assocSearch||'').trim().toLowerCase();
-    const shownList=q?list.filter(r=>[r.name,r.license,r.city].join(' ').toLowerCase().includes(q)):list;
-    const currentId=db.associationId||'';
-    el.innerHTML=`<div class="section-title"><div><h3>سجل الجمعيات</h3><p class="hint">كل جمعية تحفظ كملف مستقل ويمكن العودة إليها واستكمال التشخيص دون فقد البيانات السابقة.</p></div><button class="btn primary" onclick="createNewAssociation()">+ جمعية جديدة</button></div><div class="registry-summary"><span class="badge">إجمالي الجمعيات: ${list.length}</span><span class="badge">الجمعية الحالية: ${esc(registryName(db))}</span></div><div class="registry-toolbar"><input id="assocSearch" placeholder="ابحث باسم الجمعية أو رقم الترخيص أو المدينة" value="${esc(window._assocSearch||'')}" oninput="window._assocSearch=this.value;renderAssociations()"><button class="btn" onclick="exportRegistry()">تصدير سجل الجمعيات</button></div>${shownList.length?`<div class="registry-grid">${shownList.map(r=>{const d=r.data||{},pre=typeof overall==='function'?(()=>{const prev=db;try{db=d;return overall('pre')}finally{db=prev}})():null;return `<div class="registry-card ${r.id===currentId?'current':''}"><h4>${esc(r.name||'جمعية بدون اسم')}</h4><div class="registry-meta"><span>رقم الترخيص: ${esc(r.license||'—')}</span><span>المدينة: ${esc(r.city||'—')}</span><span>آخر تحديث: ${r.updated?new Date(r.updated).toLocaleString('ar-SA'):'—'}</span><span>نتيجة قبلي: ${pre===null||pre===undefined?'—':pre+'%'}</span></div><div class="registry-actions"><button class="btn primary" onclick="openAssociation('${r.id}')">${r.id===currentId?'فتح الحالية':'فتح واستكمال'}</button><button class="btn" onclick="duplicateAssociation('${r.id}')">نسخ</button><button class="btn danger" onclick="deleteAssociation('${r.id}')">حذف</button></div></div>`}).join('')}</div>`:`<div class="panel registry-empty">لا توجد جمعية مطابقة. أنشئ جمعية جديدة لبدء التشخيص.</div>`}`;
-  };
-  window.openAssociation=function(id){
+window.renderAssociations = async function () {
+  const el = document.getElementById('associations');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div class="panel">
+      <div class="empty">جارٍ تحميل الجمعيات من السحابة...</div>
+    </div>
+  `;
+
+  try {
+    const { data: memberships, error: memberError } = await supabaseClient
+      .from('organization_members')
+      .select('organization_id, role')
+      .eq('user_id', currentUser.id);
+
+    if (memberError) throw memberError;
+
+    const ids = (memberships || []).map(x => x.organization_id);
+
+    if (!ids.length) {
+      el.innerHTML = `
+        <div class="section-title">
+          <div>
+            <h3>سجل الجمعيات</h3>
+            <p class="hint">الجمعيات المرتبطة بحسابك والمحفوظه على الإنترنت.</p>
+          </div>
+          <button class="btn primary" onclick="createNewAssociation()">
+            + جمعية جديدة
+          </button>
+        </div>
+
+        <div class="panel registry-empty">
+          لا توجد جمعيات مرتبطة بهذا الحساب حتى الآن.
+        </div>
+      `;
+      return;
+    }
+
+    const { data: orgs, error: orgError } = await supabaseClient
+      .from('organizations')
+      .select('id,name,license_number,city,updated_at')
+      .in('id', ids);
+
+    if (orgError) throw orgError;
+
+    const list = (orgs || []).sort((a,b) =>
+      String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
+    );
+
+    const q = (window._assocSearch || '').trim().toLowerCase();
+
+    const shownList = q
+      ? list.filter(r =>
+          [r.name, r.license_number, r.city]
+            .join(' ')
+            .toLowerCase()
+            .includes(q)
+        )
+      : list;
+
+    const currentId = db.cloudOrganizationId || '';
+
+    el.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>سجل الجمعيات</h3>
+          <p class="hint">
+            الجمعيات محفوظة سحابيًا ويمكن فتحها من أي جهاز بعد تسجيل الدخول.
+          </p>
+        </div>
+
+        <button class="btn primary" onclick="createNewAssociation()">
+          + جمعية جديدة
+        </button>
+      </div>
+
+      <div class="registry-summary">
+        <span class="badge">
+          إجمالي الجمعيات: ${list.length}
+        </span>
+
+        <span class="badge">
+          الجمعية الحالية:
+          ${esc((db.profile && db.profile.name) || 'بدون اسم')}
+        </span>
+      </div>
+
+      <div class="registry-toolbar">
+        <input
+          id="assocSearch"
+          placeholder="ابحث باسم الجمعية أو رقم الترخيص أو المدينة"
+          value="${esc(window._assocSearch || '')}"
+          oninput="window._assocSearch=this.value;renderAssociations()"
+        >
+      </div>
+
+      ${
+        shownList.length
+        ? `<div class="registry-grid">
+            ${shownList.map(r => `
+              <div class="registry-card ${r.id === currentId ? 'current' : ''}">
+
+                <h4>${esc(r.name || 'جمعية بدون اسم')}</h4>
+
+                <div class="registry-meta">
+                  <span>
+                    رقم الترخيص:
+                    ${esc(r.license_number || '—')}
+                  </span>
+
+                  <span>
+                    المدينة:
+                    ${esc(r.city || '—')}
+                  </span>
+
+                  <span>
+                    آخر تحديث:
+                    ${
+                      r.updated_at
+                      ? new Date(r.updated_at).toLocaleString('ar-SA')
+                      : '—'
+                    }
+                  </span>
+                </div>
+
+                <div class="registry-actions">
+
+                  <button
+                    class="btn primary"
+                    onclick="openAssociation('${r.id}')">
+                    ${r.id === currentId ? 'فتح الحالية' : 'فتح واستكمال'}
+                  </button>
+
+                  <button
+                    class="btn danger"
+                    onclick="deleteAssociation('${r.id}')">
+                    حذف
+                  </button>
+
+                </div>
+              </div>
+            `).join('')}
+          </div>`
+        : `
+          <div class="panel registry-empty">
+            لا توجد جمعية مطابقة لعملية البحث.
+          </div>
+        `
+      }
+    `;
+
+  } catch (error) {
+    console.error('Load associations error:', error);
+
+    el.innerHTML = `
+      <div class="panel">
+        <div class="notice danger">
+          تعذر تحميل سجل الجمعيات من السحابة.
+        </div>
+      </div>
+    `;
+  }
+};
+
+
+window.openAssociation = async function (id) {
+
+  try {
+    toast('جارٍ تحميل الجمعية...');
+
+    const { data: row, error } = await supabaseClient
+      .from('organization_data')
+      .select('data')
+      .eq('organization_id', id)
+      .single();
+
+    if (error) throw error;
+
+    db = normalizeDb(row.data || null);
+
+    db.cloudOrganizationId = id;
+
+    if (!db.associationId) {
+      db.associationId = id;
+    }
+
+    safeStore(db);
+
     upsertCurrentToRegistry();
-    const r=loadRegistry().find(x=>x.id===id);if(!r)return alert('تعذر العثور على سجل الجمعية');
-    db=normalizeDb(clone(r.data));db.associationId=id;safeStore(db);
-    toast('تم فتح '+registryName(db));showPage('home',navButton('home'));
-  };
-  window.createNewAssociation=function(){
-    upsertCurrentToRegistry();
-    db=normalizeDb(null);db.associationId=newId();db.updated=new Date().toISOString();safeStore(db);
-    toast('تم إنشاء ملف جمعية جديد دون حذف الجمعيات السابقة');showPage('profile',navButton('profile'));
-  };
-  window.resetData=window.createNewAssociation;
-  window.deleteAssociation=function(id){
-    const list=loadRegistry();const r=list.find(x=>x.id===id);if(!r)return;
-    if(!confirm(`سيتم حذف سجل «${r.name||'الجمعية'}» فقط من هذا المتصفح. هل أنت متأكد؟`))return;
-    const next=list.filter(x=>x.id!==id);storeRegistry(next);
-    if(db.associationId===id){db=normalizeDb(null);db.associationId=newId();safeStore(db)}
-    renderAssociations();toast('تم حذف سجل الجمعية المحددة');
-  };
-  window.duplicateAssociation=function(id){
-    const list=loadRegistry();const r=list.find(x=>x.id===id);if(!r)return;
-    const d=normalizeDb(clone(r.data));d.associationId=newId();d.profile=d.profile||{};d.profile.name=(d.profile.name||'جمعية')+' - نسخة';d.updated=new Date().toISOString();
-    const rec={id:d.associationId,name:registryName(d),license:d.profile.license||'',city:d.profile.city||'',updated:d.updated,data:clone(d)};list.unshift(rec);storeRegistry(list);renderAssociations();toast('تم إنشاء نسخة مستقلة من سجل الجمعية');
-  };
-  window.exportRegistry=function(){
-    upsertCurrentToRegistry();
-    const payload={version:'8.0',exportedAt:new Date().toISOString(),associations:loadRegistry()};
-    const b=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='سجل-الجمعيات.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500);
-  };
-  const oldRender=window.render;
-  window.render=function(id){if(id==='associations')return renderAssociations();return oldRender(id)};
-  const oldRenderHome=window.renderHome;
-  window.renderHome=function(){oldRenderHome();const root=document.getElementById('home');if(root){const hero=root.querySelector('.hero');if(hero){hero.insertAdjacentHTML('afterend',`<div class="panel"><div class="section-title"><div><h3>إدارة الجمعيات</h3><p class="hint">السجل يحفظ كل جمعية بصورة مستقلة ويتيح التبديل بينها.</p></div><button class="btn primary" onclick="showPage('associations',navButton('associations'))">فتح سجل الجمعيات</button></div></div>`)}}};
-  // Replace the old destructive top-button wording/action
-  function refreshTopNewButton(){const b=document.getElementById('resetBtn');if(b){b.textContent='جمعية جديدة';b.classList.remove('danger');b.onclick=createNewAssociation;b.title='يحفظ الجمعية الحالية في السجل ثم يبدأ ملف جمعية جديد'}}
+
+    toast('تم فتح ' + registryName(db));
+
+    showPage('home', navButton('home'));
+
+  } catch (error) {
+    console.error('Open association error:', error);
+
+    alert('تعذر تحميل بيانات الجمعية من السحابة.');
+  }
+};
+
+
+window.createNewAssociation = function () {
+
+  db = normalizeDb(null);
+
+  db.associationId = newId();
+
+  db.cloudOrganizationId = null;
+
+  db.updated = new Date().toISOString();
+
+  safeStore(db);
+
+  toast('تم إنشاء جمعية جديدة');
+
+  showPage('profile', navButton('profile'));
+};
+
+
+window.resetData = window.createNewAssociation;
+
+
+window.deleteAssociation = async function (id) {
+
+  if (!confirm(
+    'سيتم حذف الجمعية من الحفظ السحابي. هل أنت متأكد؟'
+  )) return;
+
+  try {
+
+    const { error } = await supabaseClient
+      .from('organizations')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    if (db.cloudOrganizationId === id) {
+      db = normalizeDb(null);
+      db.associationId = newId();
+      db.cloudOrganizationId = null;
+      safeStore(db);
+    }
+
+    toast('تم حذف الجمعية');
+
+    await renderAssociations();
+
+  } catch (error) {
+    console.error('Delete association error:', error);
+
+    alert('تعذر حذف الجمعية. تحقق من الصلاحيات.');
+  }
+};
 
 (async function startApp(){
   const { data: { session } } = await supabaseClient.auth.getSession();
@@ -718,7 +931,6 @@ window.saveAll = function(msg = false) {
   if (session && session.user) {
     currentUser = session.user;
      initNav();
-refreshTopNewButton();
     renderHome();
   } else {
     showLoginScreen();
