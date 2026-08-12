@@ -678,11 +678,44 @@ window.renderAssociations = async function () {
     </div>
   `;
 
-  try {
+try {
+
+  // التحقق من صلاحية المستخدم العامة
+  const { data: profile, error: profileError } = await supabaseClient
+    .from('profiles')
+    .select('is_system_admin,is_active')
+    .eq('id', currentUser.id)
+    .single();
+
+  if (profileError) throw profileError;
+
+  if (!profile || profile.is_active !== true) {
+    throw new Error('USER_INACTIVE');
+  }
+
+  const isSystemAdmin = profile.is_system_admin === true;
+
+  let orgs = [];
+
+  // مدير النظام يرى جميع الجمعيات تلقائيًا
+  if (isSystemAdmin) {
+
+    const { data, error } = await supabaseClient
+      .from('organizations')
+      .select('id,name,license_number,city,updated_at');
+
+    if (error) throw error;
+
+    orgs = data || [];
+
+  } else {
+
+    // بقية المستخدمين يرون فقط الجمعيات المسندة إليهم
     const { data: memberships, error: memberError } = await supabaseClient
       .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', currentUser.id);
+      .select('organization_id, role, is_active')
+      .eq('user_id', currentUser.id)
+      .eq('is_active', true);
 
     if (memberError) throw memberError;
 
@@ -693,11 +726,8 @@ window.renderAssociations = async function () {
         <div class="section-title">
           <div>
             <h3>سجل الجمعيات</h3>
-            <p class="hint">الجمعيات المرتبطة بحسابك والمحفوظه على الإنترنت.</p>
+            <p class="hint">الجمعيات المرتبطة بحسابك والمحفوظة على الإنترنت.</p>
           </div>
-          <button class="btn primary" onclick="createNewAssociation()">
-            + جمعية جديدة
-          </button>
         </div>
 
         <div class="panel registry-empty">
@@ -707,12 +737,15 @@ window.renderAssociations = async function () {
       return;
     }
 
-    const { data: orgs, error: orgError } = await supabaseClient
+    const { data, error } = await supabaseClient
       .from('organizations')
       .select('id,name,license_number,city,updated_at')
       .in('id', ids);
 
-    if (orgError) throw orgError;
+    if (error) throw error;
+
+    orgs = data || [];
+  }
 
     const list = (orgs || []).sort((a,b) =>
       String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
