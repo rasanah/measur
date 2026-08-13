@@ -1045,3 +1045,40 @@ if (session && session.user) {
 
 </script>
 </body></html>
+
+<style>.roleSwitch{display:flex;gap:6px;align-items:center}.roleSwitch select{max-width:220px}.registry-card.archived{opacity:.7}.readOnly{color:#8d5e0b;font-size:12px}</style>
+<script>
+(function(){
+var labels={system_admin:'مدير النظام',consultant:'مستشار',project_manager:'مدير مشروع',org_admin:'مدير الجمعية',guest:'زائر',editor:'محرر',viewer:'مشاهد'},writers=['system_admin','consultant','project_manager','org_admin','editor'],managers=['system_admin','org_admin'];
+window.userRoles=[];window.activeRole=null;
+function canWrite(){return activeRole&&writers.includes(activeRole.role)}
+function canManage(){return activeRole&&managers.includes(activeRole.role)}
+function canSee(id){return activeRole&&(activeRole.role==='system_admin'||activeRole.organization_id===id)}
+async function loadRoles(){
+ var x=await supabaseClient.from('user_roles').select('id,role,organization_id,project_id,is_active,created_at').eq('user_id',currentUser.id).eq('is_active',true).order('created_at');
+ if(x.error){console.error(x.error);return}
+ userRoles=x.data||[];var saved=localStorage.getItem('active_role_id');activeRole=userRoles.find(function(r){return r.id===saved})||userRoles.find(function(r){return r.role==='system_admin'})||userRoles[0]||null;drawSwitch();
+}
+function drawSwitch(){
+ var a=document.querySelector('.actions');if(!a)return;var old=document.getElementById('roleSwitch');if(old)old.remove();
+ var d=document.createElement('div');d.id='roleSwitch';d.className='roleSwitch';var s=document.createElement('select');
+ userRoles.forEach(function(r){var o=document.createElement('option');o.value=r.id;o.textContent=(labels[r.role]||r.role)+(r.organization_id?' — جمعية':r.project_id?' — مشروع':' — المنصة');o.selected=activeRole&&activeRole.id===r.id;s.appendChild(o)});
+ s.onchange=function(){activeRole=userRoles.find(function(r){return r.id===s.value});localStorage.setItem('active_role_id',s.value);drawSwitch();if(document.getElementById('associations').classList.contains('active'))renderAssociations()};
+ d.appendChild(document.createTextNode('الدور الحالي: '));d.appendChild(s);if(!canWrite()){var b=document.createElement('span');b.className='readOnly';b.textContent='قراءة فقط';d.appendChild(b)}a.insertBefore(d,a.firstChild);
+}
+var oldSave=window.saveAll;window.saveAll=function(){if(activeRole&&!canWrite()){toast('الدور الحالي للقراءة فقط');return false}return oldSave.apply(this,arguments)};
+window.renderAssociations=async function(){
+ var el=document.getElementById('associations');el.innerHTML='<div class="panel empty">جارٍ التحميل...</div>';
+ try{
+  if(!activeRole)await loadRoles();if(!activeRole)throw Error('NO_ROLE');
+  var x=await supabaseClient.from('organizations').select('id,name,license_number,city,status,updated_at').order('updated_at',{ascending:false});if(x.error)throw x.error;
+  var list=(x.data||[]).filter(function(r){return canSee(r.id)}),q=(window._assocSearch||'').toLowerCase(),shown=q?list.filter(function(r){return [r.name,r.license_number,r.city].join(' ').toLowerCase().includes(q)}):list;
+  var h='<div class="section-title"><div><h3>سجل الجمعيات</h3><p class="hint">حسب نطاق الدور الحالي — الحذف مستبدل بالأرشفة.</p></div>'+(activeRole.role==='system_admin'?'<button class="btn primary" onclick="createNewAssociation()">+ جمعية جديدة</button>':'')+'</div><div class="registry-summary"><span class="badge">الدور: '+esc(labels[activeRole.role]||activeRole.role)+'</span><span class="badge">الجمعيات: '+list.length+'</span></div><div class="registry-toolbar"><input placeholder="ابحث باسم الجمعية" value="'+esc(window._assocSearch||'')+'" oninput="window._assocSearch=this.value;renderAssociations()"></div>';
+  if(!shown.length)h+='<div class="panel registry-empty">لا توجد جمعيات ضمن نطاق الدور.</div>';else h+='<div class="registry-grid">'+shown.map(function(r){var ar=r.status==='archived';return '<div class="registry-card '+(ar?'archived':'')+'"><h4>'+esc(r.name||'جمعية بدون اسم')+'</h4><div class="registry-meta"><span>رقم الترخيص: '+esc(r.license_number||'—')+'</span><span>المدينة: '+esc(r.city||'—')+'</span><span>الحالة: '+(ar?'مؤرشفة':'نشطة')+'</span></div><div class="registry-actions">'+(!ar?'<button class="btn primary" onclick="openAssociation(\''+r.id+'\')">فتح</button>':'')+(canManage()?(ar?'<button class="btn" onclick="restoreAssociation(\''+r.id+'\')">استعادة</button>':'<button class="btn danger" onclick="deleteAssociation(\''+r.id+'\')">أرشفة</button>'):'')+'</div></div>'}).join('')+'</div>';el.innerHTML=h;
+ }catch(e){console.error(e);el.innerHTML='<div class="notice danger">تعذر تحميل الجمعيات أو لا يوجد دور نشط.</div>'}
+};
+window.deleteAssociation=async function(id){if(!canManage())return alert('لا تملك صلاحية الأرشفة');if(!confirm('سيتم أرشفة الجمعية مع إمكانية استعادتها.'))return;var x=await supabaseClient.rpc('archive_organization',{org_id:id});if(x.error)return alert('تعذرت الأرشفة');toast('تمت أرشفة الجمعية');renderAssociations()};
+window.restoreAssociation=async function(id){if(!canManage())return alert('لا تملك صلاحية الاستعادة');var x=await supabaseClient.rpc('restore_organization',{org_id:id});if(x.error)return alert('تعذرت الاستعادة');toast('تمت استعادة الجمعية');renderAssociations()};
+supabaseClient.auth.getSession().then(function(x){if(x.data.session){currentUser=x.data.session.user;loadRoles()}});
+})();
+</script>
