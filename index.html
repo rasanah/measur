@@ -1097,3 +1097,5 @@ window.assignUserRole=async function(){var u=document.getElementById('raUser').v
 window.toggleUserRole=async function(id,state){var t=R.find(function(r){return r.id===id});if(t&&t.user_id===currentUser.id&&t.role==='system_admin'&&!state&&!confirm('تعطيل دور مدير النظام لحسابك؟'))return;var x=await supabaseClient.from('user_roles').update({is_active:state}).eq('id',id);if(x.error)return alert('تعذر تحديث الدور.');toast(state?'تم التفعيل':'تم التعطيل');await renderRoleAdmin();if(t&&t.user_id===currentUser.id){await loadUserRoles();await refresh()}};
 })();
 </script>
+
+<script id="roleAdminV10Fix">window.loadUserRoles=window.loadUserRoles||async function(){location.reload()};<\/script>
