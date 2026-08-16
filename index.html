@@ -1099,3 +1099,5 @@ window.toggleUserRole=async function(id,state){var t=R.find(function(r){return r
 </script>
 
 <script id="roleAdminV10Fix">window.loadUserRoles=window.loadUserRoles||async function(){location.reload()};<\/script>
+
+<script id="roleAdminV10NavFix">(function(){setInterval(function(){var b=document.getElementById('roleAdminNav');if(b&&!b.getAttribute('onclick'))b.setAttribute('onclick',"showPage('roleAdmin',this);renderRoleAdmin()")},500)})();<\/script>
